@@ -1,55 +1,14 @@
-from matrix_v3 import SparseMatrix
+from easy_v5 import load_data, center_data, covariance_matrix, to_dense
 import math
+from typing import List
 
 
-def load_data(file_path):
-    X = SparseMatrix(file_path)
-    return [[X.get_element(i, j) for j in range(X.num_cols)] for i in range(X.num_rows)]
-
-
-def center_data(X):
-    rows, cols = len(X), len(X[0])
-    means = [sum(X[i][j] for i in range(rows)) / rows for j in range(cols)]
-    return [[X[i][j] - means[j] for j in range(cols)] for i in range(rows)]
-
-
-def covariance_matrix(X_centered):
-    n = len(X_centered)
-    Xt = [[X_centered[i][j] for i in range(n)] for j in range(len(X_centered[0]))]
-    C = [[sum(Xt[i][k] * X_centered[k][j] for k in range(n)) for j in range(len(Xt[0]))] for i in range(len(Xt))]
-    return [[C[i][j] / (n - 1) for j in range(len(C[0]))] for i in range(len(C))]
-
-
-def gauss_solver(A, b):
-    n = len(A)
-    aug = [[A[i][j] for j in range(n)] + [b[i][0]] for i in range(n)]
-    for i in range(n):
-        max_el, max_row = max((abs(aug[k][i]), k) for k in range(i, n))
-        if max_el < 1e-10:
-            raise ValueError("Система несовместна")
-        if max_row != i:
-            aug[i], aug[max_row] = aug[max_row], aug[i]
-        pivot = aug[i][i]
-        for j in range(i, n + 1):
-            aug[i][j] /= pivot
-        for k in range(n):
-            if k != i:
-                factor = aug[k][i]
-                for j in range(i, n + 1):
-                    aug[k][j] -= factor * aug[i][j]
-    sol = [[aug[i][n]] for i in range(n)]
-    if all(abs(x[0]) < 1e-10 for x in sol):
-        for j in range(n - 1, -1, -1):
-            if any(abs(aug[i][j]) > 1e-10 for i in range(n)):
-                return [[0 if k != j else 1] for k in range(n)]
-    return sol
-
-
-def find_eigenvalues(C, tol=1e-6):
+def find_eigenvalues(C: List[List[float]], tol: float = 1e-6) -> List[float]:
+    """Находит собственные значения матрицы C методом бисекции."""
     n = len(C)
     eigenvalues = []
 
-    def det_lambda(lambd):
+    def det_lambda(lambd: float) -> float:
         A = [[C[i][j] - (lambd if i == j else 0) for j in range(n)] for i in range(n)]
         det = 1.0
         for i in range(n):
@@ -67,8 +26,8 @@ def find_eigenvalues(C, tol=1e-6):
         return det
 
     trace = sum(C[i][i] for i in range(n))
-    a, step = 0, 0.1
-    while a < trace + step:
+    a, step = -abs(trace), 0.1
+    while a < abs(trace):
         b = a + step
         fa, fb = det_lambda(a), det_lambda(b)
         if fa * fb > 0:
@@ -84,50 +43,133 @@ def find_eigenvalues(C, tol=1e-6):
             else:
                 a, fa = m, fm
         root = (a + b) / 2
+        if abs(root) < 1e-6:
+            root = 0.0
         if all(abs(root - val) > tol for val in eigenvalues):
             eigenvalues.append(root)
         a += step
 
-    eigenvalues.sort(reverse=True)
-    return eigenvalues
+    return sorted(eigenvalues, reverse=True)
 
 
-def find_eigenvectors(C, eigenvalues):
+def compute_kernel(A: List[List[float]], epsilon: float = 1e-6) -> List[List[float]]:
+    """Находит базис ядра матрицы A с высокой численной устойчивостью."""
+    n = len(A)
+    augmented = [row[:] + [0.0] for row in A]
+
+    # Прямой ход с частичным выбором ведущего элемента
+    pivot_cols = []
+    row_swaps = 0
+    for i in range(n):
+        max_el, max_row, pivot_col = 0, i, -1
+        for j in range(n):
+            if j in pivot_cols:
+                continue
+            for k in range(i, n):
+                if abs(augmented[k][j]) > max_el:
+                    max_el, max_row, pivot_col = abs(augmented[k][j]), k, j
+        # Проверяем, является ли строка почти нулевой
+        if max_el < epsilon:
+            # Дополнительная проверка суммы элементов строки
+            row_sum = max(sum(abs(augmented[k][j]) for j in range(n)) for k in range(i, n))
+            if row_sum < epsilon:
+                continue
+            # Если сумма значима, ищем другой столбец
+            for j in range(n):
+                if j in pivot_cols:
+                    continue
+                for k in range(i, n):
+                    if abs(augmented[k][j]) > max_el:
+                        max_el, max_row, pivot_col = abs(augmented[k][j]), k, j
+            if max_el < epsilon:
+                continue
+        pivot_cols.append(pivot_col)
+        if max_row != i:
+            augmented[i], augmented[max_row] = augmented[max_row], augmented[i]
+            row_swaps += 1
+        pivot = augmented[i][pivot_col]
+        for j in range(n + 1):
+            augmented[i][j] /= pivot
+        for k in range(n):
+            if k != i:
+                factor = augmented[k][pivot_col]
+                for j in range(n + 1):
+                    augmented[k][j] -= factor * augmented[i][j]
+
+    # Проверка вырожденности
+    rank = len(pivot_cols)
+
+    # Формируем базис ядра
+    free_vars = [j for j in range(n) if j not in pivot_cols]
+    solutions = []
+    for var in free_vars:
+        vec = [0.0] * n
+        vec[var] = 1.0
+        for i in range(min(rank, n)):
+            pivot_col = pivot_cols[i]
+            sum_val = sum(augmented[i][k] * vec[k] for k in range(n) if k != pivot_col)
+            vec[pivot_col] = -sum_val / augmented[i][pivot_col] if abs(augmented[i][pivot_col]) >= epsilon else 0.0
+        norm = math.sqrt(sum(x ** 2 for x in vec))
+        if norm >= epsilon:
+            solutions.append([x / norm for x in vec])
+
+    # Если нет решений и ранг < n, добавляем нулевой вектор
+    if not solutions and rank < n:
+        solutions.append([0.0] * n)
+
+    return solutions
+
+
+def find_eigenvectors(C: List[List[float]], eigenvalues: List[float], epsilon: float = 1e-6) -> List[List[float]]:
+    """Находит ортонормированные собственные векторы матрицы C."""
+    n = len(C)
     eigvecs = []
-    for lambd in eigenvalues:
-        A = [[C[i][j] - (lambd if i == j else 0) for j in range(len(C))] for i in range(len(C))]
-        v = gauss_solver(A, [[0] for _ in range(len(C))])
-        norm = math.sqrt(sum(v[i][0] ** 2 for i in range(len(v))))
-        v = [[v[i][0] / norm if norm > 1e-10 else (1 if i == 0 else 0)] for i in range(len(v))]
+
+    for idx, lambd in enumerate(eigenvalues):
+        A = [[C[i][j] - (lambd if i == j else 0) for j in range(n)] for i in range(n)]
+        solutions = compute_kernel(A, epsilon)
+        v = None
+        for sol in solutions:
+            norm = math.sqrt(sum(x ** 2 for x in sol))
+            if norm > epsilon:
+                v = sol[:]  # Векторы уже нормированы в compute_kernel
+                break
+        if v is None:
+            v = [1.0 if i == idx else 0.0 for i in range(n)]
         eigvecs.append(v)
-    if len(eigvecs) == 2:
-        v1, v2 = eigvecs
-        dot = sum(v1[i][0] * v2[i][0] for i in range(len(v1)))
-        if abs(dot) > 1e-6:
-            proj = [[dot * v1[i][0]] for i in range(len(v1))]
-            v2 = [[v2[i][0] - proj[i][0]] for i in range(len(v2))]
-            norm = math.sqrt(sum(v2[i][0] ** 2 for i in range(len(v2))))
-            v2 = [[v2[i][0] / norm if norm > 1e-10 else (-v1[1][0] if i == 0 else v1[0][0])] for i in range(len(v2))]
-        eigvecs[1] = v2
-    return eigvecs
+
+    # Ортогонализация Грама-Шмидта
+    ortho_eigvecs = []
+    for idx, v in enumerate(eigvecs):
+        u = v[:]
+        for prev_u in ortho_eigvecs:
+            proj = sum(prev_u[k] * u[k] for k in range(n))
+            u = [u[k] - proj * prev_u[k] for k in range(n)]
+        norm = math.sqrt(sum(x ** 2 for x in u))
+        if norm > epsilon:
+            u = [x / norm for x in u]
+        else:
+            u = [1.0 if i == idx else 0.0 for i in range(n)]
+        ortho_eigvecs.append(u)
+
+    return ortho_eigvecs
 
 
-def explained_variance_ratio(eigenvalues, k):
+def explained_variance_ratio(eigenvalues: List[float], k: int) -> float:
+    """Вычисляет долю объяснённой дисперсии для k компонент."""
     total = sum(eigenvalues)
-    return sum(eigenvalues[:k]) / total if total > 0 else 0.0
+    return sum(eigenvalues[:k]) / total if total > 0 and 0 < k <= len(eigenvalues) else 0.0
 
 
 if __name__ == "__main__":
-    X = load_data("int_3x3.csv")
+    X = load_data("../datasets/int_3x3_2.csv")
     X_c = center_data(X)
     C = covariance_matrix(X_c)
-    print("\nМатрица ковариаций:")
-    for row in C:
-        print([round(x, 4) for x in row])
-    eigvals = find_eigenvalues(C)
-    print("\nСобственные значения:", [round(x, 4) for x in eigvals])
-    eigvecs = find_eigenvectors(C, eigvals)
+    C_dense = to_dense(C)
+    eigenvalues = find_eigenvalues(C_dense)
+    print("\nСобственные значения:", [round(x, 4) for x in eigenvalues])
+    eigvecs = find_eigenvectors(C_dense, eigenvalues)
     print("\nСобственные векторы:")
     for vec in eigvecs:
-        print([round(vec[i][0], 4) for i in range(len(vec))])
-    print(f"\nДоля объяснённой дисперсии (k=1): {round(explained_variance_ratio(eigvals, 1), 4)}")
+        print([round(x, 4) for x in vec])
+    print(f"\nДоля объяснённой дисперсии (k=1): {round(explained_variance_ratio(eigenvalues, 1), 4)}")
