@@ -1,168 +1,118 @@
-from matrix_v3 import SparseMatrix
+from CSR_matrix import SparseMatrix
+from easy_v5 import load_data, center_data, covariance_matrix, to_dense, to_sparse
+from normal_v5 import find_eigenvalues, find_eigenvectors, explained_variance_ratio
+from typing import Tuple
+from matplotlib.figure import Figure
 import matplotlib.pyplot as plt
-import math
 
 
-def load_data(file_path):
-    X = SparseMatrix(file_path)
-    return [[X.get_element(i, j) for j in range(X.num_cols)] for i in range(X.num_rows)]
+def pca(X: SparseMatrix, k: int) -> Tuple[SparseMatrix, float]:
+    """
+    Выполняет PCA на матрице данных X, возвращает проекцию на k компонент и долю дисперсии.
+
+    Вход:
+        X: матрица данных (n×m)
+        k: число главных компонент
+    Выход:
+        X_proj: проекция данных (n×k)
+        variance_ratio: доля объяснённой дисперсии
+    """
+    # Центрирование данных
+    X_centered = center_data(X)
+
+    # Вычисление матрицы выборочных ковариаций
+    C = covariance_matrix(X_centered)
+    C_dense = to_dense(C)
+
+    # Нахождение собственных значений и векторов
+    eigenvalues = find_eigenvalues(C_dense)
+    eigenvectors = find_eigenvectors(C_dense, eigenvalues)
+
+    # Проекция данных на k главных компонент
+    n, m = X_centered.num_rows, X_centered.num_cols
+    X_dense = to_dense(X_centered)
+    V = [eigenvectors[i] for i in range(min(k, len(eigenvectors)))]
+    projected = [[sum(X_dense[i][j] * V[l][j] for j in range(m)) for l in range(len(V))] for i in range(n)]
+    X_proj = to_sparse(projected, n, len(V))
+
+    # Доля объяснённой дисперсии
+    variance_ratio = explained_variance_ratio(eigenvalues, k)
+
+    return X_proj, variance_ratio
 
 
-def center_data(X):
-    rows, cols = len(X), len(X[0])
-    means = [sum(X[i][j] for i in range(rows)) / rows for j in range(cols)]
-    X_c = [[X[i][j] - means[j] for j in range(cols)] for i in range(rows)]
-    return X_c, means
+def plot_pca_projection(X_proj: SparseMatrix) -> Figure:
+    """
+    Визуализирует проекцию данных на первые две главные компоненты.
 
+    Вход:
+        X_proj: проекция данных (n×2)
+    Выход:
+        объект Figure из Matplotlib
+    """
+    if X_proj.num_cols != 2:
+        raise ValueError("X_proj must have exactly 2 columns for visualization")
 
-def covariance_matrix(X_centered):
-    n = len(X_centered)
-    Xt = [[X_centered[i][j] for i in range(n)] for j in range(len(X_centered[0]))]
-    C = [[sum(Xt[i][k] * X_centered[k][j] for k in range(n)) for j in range(len(Xt[0]))] for i in range(len(Xt))]
-    return [[C[i][j] / (n - 1) for j in range(len(C[0]))] for i in range(len(C))]
+    X_dense = to_dense(X_proj)
+    fig, ax = plt.subplots()
+    ax.scatter([row[0] for row in X_dense], [row[1] for row in X_dense], c='blue', marker='o')
+    ax.set_xlabel('Principal Component 1')
+    ax.set_ylabel('Principal Component 2')
+    ax.set_title('PCA Projection')
+    ax.grid(True)
 
+    # Вывод графика вместо сохранения
+    plt.show()
 
-def gauss_solver(A, b):
-    n = len(A)
-    aug = [[A[i][j] for j in range(n)] + [b[i][0]] for i in range(n)]
-    for i in range(n):
-        max_el, max_row = max((abs(aug[k][i]), k) for k in range(i, n))
-        if max_el < 1e-10:
-            raise ValueError("Система несовместна")
-        if max_row != i:
-            aug[i], aug[max_row] = aug[max_row], aug[i]
-        pivot = aug[i][i]
-        for j in range(i, n + 1):
-            aug[i][j] /= pivot
-        for k in range(n):
-            if k != i:
-                factor = aug[k][i]
-                for j in range(i, n + 1):
-                    aug[k][j] -= factor * aug[i][j]
-    sol = [[aug[i][n]] for i in range(n)]
-    if all(abs(x[0]) < 1e-10 for x in sol):
-        for j in range(n - 1, -1, -1):
-            if any(abs(aug[i][j]) > 1e-10 for i in range(n)):
-                return [[0 if k != j else 1] for k in range(n)]
-    return sol
-
-
-def find_eigenvalues(C, tol=1e-6):
-    n = len(C)
-    eigenvalues = []
-
-    def det_lambda(lambd):
-        A = [[C[i][j] - (lambd if i == j else 0) for j in range(n)] for i in range(n)]
-        det = 1.0
-        for i in range(n):
-            max_el, max_row = max((abs(A[k][i]), k) for k in range(i, n))
-            if max_el < 1e-12:
-                return 0.0
-            if max_row != i:
-                A[i], A[max_row] = A[max_row], A[i]
-                det *= -1
-            det *= A[i][i]
-            for j in range(i + 1, n):
-                factor = A[j][i] / A[i][i]
-                for k in range(i, n):
-                    A[j][k] -= factor * A[i][k]
-        return det
-
-    trace = sum(C[i][i] for i in range(n))
-    a, step = 0, 0.1
-    while a < trace + step:
-        b = a + step
-        fa, fb = det_lambda(a), det_lambda(b)
-        if fa * fb > 0:
-            a += step
-            continue
-        while b - a > tol:
-            m = (a + b) / 2
-            fm = det_lambda(m)
-            if abs(fm) < tol:
-                break
-            if fa * fm <= 0:
-                b, fb = m, fm
-            else:
-                a, fa = m, fm
-        root = (a + b) / 2
-        if all(abs(root - val) > tol for val in eigenvalues):
-            eigenvalues.append(root)
-        a += step
-
-    eigenvalues.sort(reverse=True)
-    return eigenvalues
-
-
-def find_eigenvectors(C, eigenvalues):
-    eigvecs = []
-    for lambd in eigenvalues:
-        A = [[C[i][j] - (lambd if i == j else 0) for j in range(len(C))] for i in range(len(C))]
-        v = gauss_solver(A, [[0] for _ in range(len(C))])
-        norm = math.sqrt(sum(v[i][0] ** 2 for i in range(len(v))))
-        v = [[v[i][0] / norm if norm > 1e-10 else (1 if i == 0 else 0)] for i in range(len(v))]
-        eigvecs.append(v)
-    if len(eigvecs) == 2:
-        v1, v2 = eigvecs
-        dot = sum(v1[i][0] * v2[i][0] for i in range(len(v1)))
-        if abs(dot) > 1e-6:
-            proj = [[dot * v1[i][0]] for i in range(len(v1))]
-            v2 = [[v2[i][0] - proj[i][0]] for i in range(len(v2))]
-            norm = math.sqrt(sum(v2[i][0] ** 2 for i in range(len(v2))))
-            v2 = [[v2[i][0] / norm if norm > 1e-10 else (-v1[1][0] if i == 0 else v1[0][0])] for i in range(len(v2))]
-        eigvecs[1] = v2
-    return eigvecs
-
-
-def explained_variance_ratio(eigenvalues, k):
-    total = sum(eigenvalues)
-    return sum(eigenvalues[:k]) / total if total > 0 else 0.0
-
-
-def pca(X, k):
-    X_c, means = center_data(X)
-    C = covariance_matrix(X_c)
-    eigvals = find_eigenvalues(C)
-    top_eigvals = eigvals[:k]
-    eigvecs = find_eigenvectors(C, top_eigvals)
-
-    X_proj = [[sum(X_c[i][j] * eigvecs[p][j][0] for j in range(len(X_c[0]))) for p in range(k)] for i in range(len(X))]
-    var_ratio = explained_variance_ratio(eigvals, k)
-    return X_proj, var_ratio, X_c, means, eigvecs
-
-
-def plot_pca_projection(X_proj):
-    if len(X_proj[0]) < 2:
-        raise ValueError("Для визуализации необходимо k >= 2")
-    fig = plt.figure(figsize=(6, 6))
-    plt.scatter([row[0] for row in X_proj], [row[1] for row in X_proj], c="blue", alpha=0.7)
-    plt.xlabel("PC1")
-    plt.ylabel("PC2")
-    plt.title("Проекция на первые 2 главные компоненты")
-    plt.grid(True)
-    plt.axis('equal')  # Добавляем равный масштаб осей
     return fig
 
 
-def reconstruction_error(X_orig, X_recon):
-    n, m = len(X_orig), len(X_orig[0])
-    error = sum((X_orig[i][j] - X_recon[i][j]) ** 2 for i in range(n) for j in range(m))
-    return error / (n * m)
+def reconstruction_error(X_orig: SparseMatrix, X_recon: SparseMatrix) -> float:
+    """
+    Вычисляет среднеквадратическую ошибку восстановления.
+
+    Вход:
+        X_orig: исходные данные (n×m)
+        X_recon: восстановленные данные (n×m)
+    Выход:
+        среднеквадратическая ошибка MSE
+    """
+    if X_orig.num_rows != X_recon.num_rows or X_orig.num_cols != X_recon.num_cols:
+        raise ValueError("X_orig and X_recon must have the same dimensions")
+
+    n, m = X_orig.num_rows, X_orig.num_cols
+    X_orig_dense = to_dense(X_orig)
+    X_recon_dense = to_dense(X_recon)
+    mse = sum((X_orig_dense[i][j] - X_recon_dense[i][j]) ** 2 for i in range(n) for j in range(m)) / (n * m)
+    return mse
 
 
 if __name__ == "__main__":
-    X = load_data("int_3x3.csv")
+    # Пример использования
+    X = load_data("../datasets/int_3x3_2.csv")
     k = 2
-    X_proj, var_ratio, X_c, means, eigvecs = pca(X, k)
-    print("\nПроекция данных:")
-    for row in X_proj:
+    X_proj, variance_ratio = pca(X, k)
+
+    # Восстановление данных для расчёта MSE
+    X_centered = center_data(X)
+    C = covariance_matrix(X_centered)
+    C_dense = to_dense(C)
+    eigenvectors = find_eigenvectors(C_dense, find_eigenvalues(C_dense))
+    V = [eigenvectors[i] for i in range(k)]
+    X_proj_dense = to_dense(X_proj)
+    X_recon_dense = [[sum(X_proj_dense[i][l] * V[l][j] for l in range(k)) for j in range(X.num_cols)] for i in
+                     range(X.num_rows)]
+    X_recon = to_sparse(X_recon_dense, X.num_rows, X.num_cols)
+
+    # Вычисление MSE
+    mse = reconstruction_error(X_centered, X_recon)
+
+    # Вывод результатов
+    print(f"Доля объяснённой дисперсии (k={k}): {round(variance_ratio, 4)}")
+    print("Спроецированные данные (k=2):")
+    for row in to_dense(X_proj):
         print([round(x, 4) for x in row])
-    print("\nДоля объяснённой дисперсии:", round(var_ratio, 4))
+    print(f"Среднеквадратическая ошибка восстановления: {round(mse, 4)}")
 
-    fig = plot_pca_projection(X_proj)
-    plt.show()
-
-    X_recon = [[sum(X_proj[i][p] * eigvecs[p][j][0] for p in range(k)) + means[j] for j in range(len(X[0]))] for i in
-               range(len(X))]
-    mse = reconstruction_error(X, X_recon)
-    print("\nMSE восстановления:", round(mse, 4))
+    # Визуализация
+    plot_pca_projection(X_proj)
