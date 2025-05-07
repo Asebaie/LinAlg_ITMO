@@ -89,7 +89,7 @@ def reconstruction_error(X_orig: SparseMatrix, X_recon: SparseMatrix) -> float:
 
 if __name__ == "__main__":
     # Пример использования
-    X = load_data("../datasets/int_3x3_2.csv")
+    X = load_data("int_3x3_2.csv")
     k = 2
     X_proj, variance_ratio = pca(X, k)
 
