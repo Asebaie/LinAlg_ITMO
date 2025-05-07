@@ -162,7 +162,7 @@ def explained_variance_ratio(eigenvalues: List[float], k: int) -> float:
 
 
 if __name__ == "__main__":
-    X = load_data("../datasets/int_3x3_2.csv")
+    X = load_data("int_3x3_2.csv")
     X_c = center_data(X)
     C = covariance_matrix(X_c)
     C_dense = to_dense(C)
